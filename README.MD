@@ -1,0 +1,6 @@
+1. Create .env file:
+>>>
+    OPENROUTER_KEY=...
+    LLM_MODEL=...
+
+2. use go run main.go
