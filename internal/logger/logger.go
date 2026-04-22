@@ -4,43 +4,120 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 )
 
-var logFile *os.File
-
 func Init() error {
-	err := os.MkdirAll("log", 0755)
-	if err != nil {
+	if err := os.MkdirAll("log", 0755); err != nil {
 		return err
 	}
 
-	timestamp := time.Now().Format("2006-01-02_15-04-05")
-	filename := filepath.Join("log", fmt.Sprintf("code2doc_%s.log", timestamp))
+	logFiles = make(map[Level]*os.File, 4)
+	levelsUsed = make(map[Level]bool, 4)
+	logChan = make(chan entry, 100)
+	closed = false
 
-	file, err := os.Create(filename)
-	if err != nil {
-		return err
-	}
+	wg.Add(1)
+	go writeLoop()
 
-	logFile = file
-	Log("INFO", "Logger initialized")
+	Log(INFO, "Logger initialized")
 	return nil
 }
 
-func Log(level string, message string) {
-	timestamp := time.Now().Format("2006-01-02 15:04:05")
-	logLine := fmt.Sprintf("[%s] [%s] %s\n", timestamp, level, message)
+func writeLoop() {
+	defer wg.Done()
 
-	if logFile != nil {
-		logFile.WriteString(logLine)
+	for e := range logChan {
+		file := logFiles[e.level]
+
+		if file == nil && !levelsUsed[e.level] {
+			dir := filepath.Join("log", e.level.String())
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				continue
+			}
+
+			timestamp := time.Now().Format("2006-01-02_15-04-05")
+			filename := filepath.Join(dir, fmt.Sprintf("code2doc_%s.log", timestamp))
+
+			f, err := os.Create(filename)
+			if err != nil {
+				continue
+			}
+
+			logFiles[e.level] = f
+			levelsUsed[e.level] = true
+			file = f
+		}
+
+		if file != nil {
+			_, _ = file.WriteString(e.message)
+		}
 	}
-	logFile.Sync()
+
+	for _, file := range logFiles {
+		if file != nil {
+			_ = file.Sync()
+		}
+	}
+}
+
+func formatLine(level Level, message string) string {
+	pc, file, line, ok := runtime.Caller(2)
+	funcName := "unknown"
+	if ok {
+		if fn := runtime.FuncForPC(pc); fn != nil {
+			funcName = fn.Name()
+		}
+	}
+
+	timestamp := time.Now().Format("2006-01-02 15:04:05")
+
+	if ok && file != "" {
+		return fmt.Sprintf("[%s] [%s] [%s:%d] (%s) %s\n", timestamp, level, file, line, funcName, message)
+	}
+	return fmt.Sprintf("[%s] [%s] %s\n", timestamp, level, message)
+}
+
+func Log(level Level, message string) {
+	line := formatLine(level, message)
+
+	mu.RLock()
+	defer mu.RUnlock()
+
+	if closed {
+		return
+	}
+
+	logChan <- entry{level: level, message: line}
 }
 
 func Close() {
-	if logFile != nil {
-		Log("INFO", "Logger closed")
-		logFile.Close()
+	mu.Lock()
+	if closed {
+		mu.Unlock()
+		return
+	}
+	closed = true
+	logChan <- entry{
+		level:   INFO,
+		message: formatLine(INFO, "Logger closed"),
+	}
+
+	close(logChan)
+	mu.Unlock()
+
+	wg.Wait()
+
+	for level, file := range logFiles {
+		if file != nil {
+			_ = file.Sync()
+			_ = file.Close()
+		}
+
+		if file == nil || !levelsUsed[level] {
+			dir := filepath.Join("log", level.String())
+			_ = os.Remove(dir)
+		}
 	}
 }
