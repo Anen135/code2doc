@@ -38,6 +38,8 @@ var (
 	closed bool
 
 	wg sync.WaitGroup
+
+	once sync.Once
 )
 
 type entry struct {

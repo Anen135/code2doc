@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func Init() error {
+func initLogger() error {
 	if err := os.MkdirAll("log", 0755); err != nil {
 		return err
 	}
@@ -20,8 +20,7 @@ func Init() error {
 
 	wg.Add(1)
 	go writeLoop()
-
-	Log(INFO, "Logger initialized")
+	logChan <- entry{level: INFO, message: formatLine(INFO, "Logger initialized")}
 	return nil
 }
 
@@ -63,7 +62,7 @@ func writeLoop() {
 }
 
 func formatLine(level Level, message string) string {
-	pc, file, line, ok := runtime.Caller(2)
+	pc, file, line, ok := runtime.Caller(3)
 	funcName := "unknown"
 	if ok {
 		if fn := runtime.FuncForPC(pc); fn != nil {
@@ -80,21 +79,27 @@ func formatLine(level Level, message string) string {
 }
 
 func Log(level Level, message string) {
+	once.Do(func() {
+		if err := initLogger(); err != nil {
+			fmt.Fprintf(os.Stderr, "CRITICAL: Failed to initialize logger: %v\n", err)
+		}
+	})
 	line := formatLine(level, message)
 
 	mu.RLock()
 	defer mu.RUnlock()
 
-	if closed {
+	if closed || logChan == nil {
+		fmt.Fprintf(os.Stderr, "CRITICAL (logger is closed): %s\n", line)
 		return
 	}
 
 	logChan <- entry{level: level, message: line}
 }
 
-func Close() {
+func Done() {
 	mu.Lock()
-	if closed {
+	if closed || logChan == nil {
 		mu.Unlock()
 		return
 	}
@@ -113,9 +118,7 @@ func Close() {
 		if file != nil {
 			_ = file.Sync()
 			_ = file.Close()
-		}
-
-		if file == nil || !levelsUsed[level] {
+		} else if !levelsUsed[level] {
 			dir := filepath.Join("log", level.String())
 			_ = os.Remove(dir)
 		}

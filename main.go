@@ -11,8 +11,7 @@ import (
 
 func main() {
 	utils.LoadEnv(".env")
-	logger.Init()
-	defer logger.Close()
+	defer logger.Done()
 
 	rootPath := "."
 	apiKey := os.Getenv("OPENROUTER_KEY")
@@ -45,6 +44,13 @@ func main() {
 	for _, file := range files {
 		fmt.Printf("Processing: %s\n", file.Path)
 		logger.Info(fmt.Sprintf("Processing file: %s", file.Path))
+		docPath := file.Path + ".md"
+		if _, err := os.Stat(docPath); err == nil {
+			fmt.Printf("Documentation already exists for %s\n", file.Path)
+			logger.Info(fmt.Sprintf("Documentation already exists for %s", file.Path))
+			continue
+		}
+
 		summary, err := scanner.AnalyzeCode(file.Path, file.Content)
 		if err != nil {
 			fmt.Printf("Failed to analyze code: %v\n", err)
@@ -61,7 +67,6 @@ func main() {
 			continue
 		}
 
-		docPath := file.Path + ".md"
 		os.WriteFile(docPath, []byte(doc), 0644)
 		logger.Info(fmt.Sprintf("Documentation saved: %s", docPath))
 		fmt.Printf("Documentation saved: %s\n", docPath)
